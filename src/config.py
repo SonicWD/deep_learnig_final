@@ -17,8 +17,10 @@ SEED = 42
 TEST_SIZE = 0.15
 VAL_SIZE = 0.15  # respecto del total; train = 1 - test - val
 
-FEATURE_COLS = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-SCALE_COLS = ["Time", "Amount"]
+# Time es opcional: el CSV de Kaggle lo trae; el espejo OpenML 1597 a veces no.
+FEATURE_COLS = [f"V{i}" for i in range(1, 29)] + ["Amount"]
+OPTIONAL_TIME = "Time"
+SCALE_COLS = ["Amount"]  # si existe Time, preprocess lo añade a SCALE_COLS
 TARGET_COL = "Class"
 
 # MLP

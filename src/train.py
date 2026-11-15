@@ -96,11 +96,12 @@ def train_mlp(x_train, y_train, x_val, y_val, pos_weight: float):
     if best_state is not None:
         model.load_state_dict(best_state)
     model.eval()
-    with torch.no_grad():
-        def predict_proba(frame: pd.DataFrame) -> np.ndarray:
+
+    def predict_proba(frame: pd.DataFrame) -> np.ndarray:
+        with torch.no_grad():
             xt = torch.tensor(frame.values, dtype=torch.float32).to(device)
             logits = model(xt)
-            return torch.sigmoid(logits).cpu().numpy()
+            return torch.sigmoid(logits).detach().cpu().numpy()
 
     return model, predict_proba, history
 

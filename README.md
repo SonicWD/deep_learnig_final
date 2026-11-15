@@ -64,10 +64,25 @@ python -m src.evaluate
 streamlit run app/streamlit_app.py
 ```
 
+## Resultados iniciales (test, umbral 0,5, semilla 42)
+
+| Modelo | Precision | Recall | F1 | AUC-ROC | AUC-PR |
+|--------|-----------|--------|-----|---------|--------|
+| MLP | 0.052 | 0.878 | 0.098 | 0.971 | 0.765 |
+| XGBoost | 0.803 | 0.824 | 0.813 | 0.961 | 0.836 |
+
+XGBoost ofrece mejor equilibrio F1/AUC-PR. El MLP prioriza Recall y motiva rediseño de umbral / TabNet / ensemble.
+
+## Pruebas
+
+```bash
+python -m pytest tests/test_preprocess.py -q
+```
+
 ## MLOps
 
-Se prevé registro de experimentos con Weights & Biases (`wandb`) en la fase de implementación (opcional: `WANDB_PROJECT=fraude-dl`).
+Weights & Biases opcional: activar `WANDB_ENABLED = True` en `src/config.py` tras `wandb.login()`.
 
 ## Licencia de datos
 
-El dataset ULB/Kaggle se usa solo con fines académicos; no se redistribuye en este repositorio.
+El dataset ULB/Kaggle (o espejo OpenML 1597) se usa solo con fines académicos; no se redistribuye en este repositorio.

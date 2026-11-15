@@ -16,6 +16,7 @@ from src.config import (
     ARTIFACTS,
     DATA_PROCESSED,
     FEATURE_COLS,
+    OPTIONAL_TIME,
     SCALE_COLS,
     SEED,
     TARGET_COL,
@@ -25,8 +26,21 @@ from src.config import (
 from src.data_load import load_raw, summarize
 
 
+def resolve_features(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    features = list(FEATURE_COLS)
+    scale = list(SCALE_COLS)
+    if OPTIONAL_TIME in df.columns:
+        features = [OPTIONAL_TIME] + features
+        scale = [OPTIONAL_TIME] + scale
+    missing = [c for c in features if c not in df.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas en el CSV: {missing}")
+    return features, scale
+
+
 def build_splits(df: pd.DataFrame):
-    x = df[FEATURE_COLS].copy()
+    features, scale_cols = resolve_features(df)
+    x = df[features].copy()
     y = df[TARGET_COL].astype(int).copy()
 
     x_train, x_temp, y_train, y_temp = train_test_split(
@@ -38,9 +52,9 @@ def build_splits(df: pd.DataFrame):
     )
 
     scaler = StandardScaler()
-    x_train.loc[:, SCALE_COLS] = scaler.fit_transform(x_train[SCALE_COLS])
-    x_val.loc[:, SCALE_COLS] = scaler.transform(x_val[SCALE_COLS])
-    x_test.loc[:, SCALE_COLS] = scaler.transform(x_test[SCALE_COLS])
+    x_train.loc[:, scale_cols] = scaler.fit_transform(x_train[scale_cols])
+    x_val.loc[:, scale_cols] = scaler.transform(x_val[scale_cols])
+    x_test.loc[:, scale_cols] = scaler.transform(x_test[scale_cols])
 
     return {
         "X_train": x_train,
@@ -50,6 +64,8 @@ def build_splits(df: pd.DataFrame):
         "y_val": y_val,
         "y_test": y_test,
         "scaler": scaler,
+        "feature_cols": features,
+        "scale_cols": scale_cols,
     }
 
 
@@ -88,6 +104,8 @@ def run() -> dict:
         "n_train": int(len(bundle["y_train"])),
         "n_val": int(len(bundle["y_val"])),
         "n_test": int(len(bundle["y_test"])),
+        "feature_cols": bundle["feature_cols"],
+        "scale_cols": bundle["scale_cols"],
     }
     save_processed(bundle, meta)
     print(json.dumps(meta, indent=2))

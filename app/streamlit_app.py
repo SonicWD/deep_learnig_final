@@ -16,7 +16,9 @@ import sys
 
 sys.path.insert(0, str(ROOT))
 
-from src.config import ARTIFACTS, FEATURE_COLS, SCALE_COLS
+import json
+
+from src.config import ARTIFACTS, DATA_PROCESSED, FEATURE_COLS
 from src.models.mlp import FraudMLP
 
 st.set_page_config(page_title="Detección de fraude", layout="centered")
@@ -29,21 +31,25 @@ def load_artifacts():
     scaler_path = ARTIFACTS / "scaler.joblib"
     xgb_path = ARTIFACTS / "xgboost.joblib"
     mlp_path = ARTIFACTS / "mlp.pt"
+    meta_path = DATA_PROCESSED / "meta.json"
     if not scaler_path.exists():
         return None
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    features = meta.get("feature_cols", FEATURE_COLS)
+    scale_cols = meta.get("scale_cols", ["Amount"])
     scaler = joblib.load(scaler_path)
     xgb = joblib.load(xgb_path) if xgb_path.exists() else None
     mlp = None
     if mlp_path.exists():
-        mlp = FraudMLP(n_features=len(FEATURE_COLS))
+        mlp = FraudMLP(n_features=len(features))
         mlp.load_state_dict(torch.load(mlp_path, map_location="cpu"))
         mlp.eval()
-    return {"scaler": scaler, "xgb": xgb, "mlp": mlp}
+    return {"scaler": scaler, "xgb": xgb, "mlp": mlp, "features": features, "scale_cols": scale_cols}
 
 
-def prepare(df: pd.DataFrame, scaler) -> pd.DataFrame:
-    frame = df[FEATURE_COLS].copy()
-    frame.loc[:, SCALE_COLS] = scaler.transform(frame[SCALE_COLS])
+def prepare(df: pd.DataFrame, scaler, features, scale_cols) -> pd.DataFrame:
+    frame = df[features].copy()
+    frame.loc[:, scale_cols] = scaler.transform(frame[scale_cols])
     return frame
 
 
@@ -58,15 +64,18 @@ if arts is None:
 modelo = st.selectbox("Modelo", ["XGBoost", "MLP"])
 modo = st.radio("Entrada", ["Subir CSV", "Ejemplo de una fila"])
 
+features = arts["features"]
+scale_cols = arts["scale_cols"]
+
 if modo == "Subir CSV":
-    file = st.file_uploader("CSV con columnas Time, V1–V28, Amount", type=["csv"])
+    file = st.file_uploader("CSV con columnas V1–V28, Amount (y Time si aplica)", type=["csv"])
     if file is not None:
         raw = pd.read_csv(file)
-        missing = [c for c in FEATURE_COLS if c not in raw.columns]
+        missing = [c for c in features if c not in raw.columns]
         if missing:
             st.error(f"Faltan columnas: {missing[:5]}...")
         else:
-            x = prepare(raw, arts["scaler"])
+            x = prepare(raw, arts["scaler"], features, scale_cols)
             if modelo == "XGBoost" and arts["xgb"] is not None:
                 probs = arts["xgb"].predict_proba(x)[:, 1]
             elif arts["mlp"] is not None:
@@ -88,14 +97,12 @@ if modo == "Subir CSV":
                 "text/csv",
             )
 else:
-    st.write("Ingrese Amount y Time; el resto se rellena en 0 solo para demo de UX.")
+    st.write("Ingrese Amount; el resto se rellena en 0 solo para demo de UX.")
     amount = st.number_input("Amount", min_value=0.0, value=100.0)
-    time_v = st.number_input("Time", min_value=0.0, value=0.0)
     if st.button("Calcular score"):
-        row = {c: 0.0 for c in FEATURE_COLS}
+        row = {c: 0.0 for c in features}
         row["Amount"] = amount
-        row["Time"] = time_v
-        x = prepare(pd.DataFrame([row]), arts["scaler"])
+        x = prepare(pd.DataFrame([row]), arts["scaler"], features, scale_cols)
         if modelo == "XGBoost" and arts["xgb"] is not None:
             prob = float(arts["xgb"].predict_proba(x)[:, 1][0])
         else:
