@@ -11,10 +11,13 @@ data/raw/*.zip
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-artifacts/
+!data/processed/meta.json
+# Modelos para inferencia en Streamlit Cloud (sí se versionan)
+!artifacts/
+!artifacts/*.pt
+!artifacts/*.joblib
+!artifacts/*.json
 models_saved/
-*.pt
-*.joblib
 wandb/
 .env
 .idea/
