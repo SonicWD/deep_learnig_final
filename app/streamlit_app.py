@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Front end intuitivo: detección de fraude en tarjetas (MLP vs XGBoost)."""
+"""Front end intuitivo: detección de fraude (explicaciones + CSV de ejemplo)."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from src.config import ARTIFACTS, DATA_PROCESSED, FEATURE_COLS
 from src.models.mlp import FraudMLP
 
 THRESHOLD = 0.5
+EJEMPLOS_DIR = Path(__file__).resolve().parent / "ejemplos_csv"
 
 st.set_page_config(
     page_title="Detector de fraude en tarjetas",
@@ -80,88 +81,179 @@ def predict_proba(modelo: str, x: pd.DataFrame, arts: dict):
     return None
 
 
-def interpretar(prob: float) -> tuple[str, str, str]:
-    """Devuelve etiqueta, color y explicación en lenguaje claro."""
+def interpretar_una(prob: float) -> dict:
     pct = 100 * prob
     if prob >= 0.8:
-        return (
-            "FRAUDE (alta sospecha)",
-            "🔴",
-            f"El modelo asignó {pct:.1f} % de probabilidad de fraude. "
-            "Conviene bloquear o revisar la transacción con prioridad.",
-        )
+        return {
+            "decision": "FRAUDE — alta sospecha",
+            "accion": "Bloquear o revisar YA con un analista.",
+            "color": "error",
+            "texto": (
+                f"El modelo cree que hay un {pct:.1f} % de chance de que sea fraude. "
+                "Eso está muy por encima del umbral del 50 %. En un banco real, "
+                "esta operación no debería aprobarse a ciegas."
+            ),
+        }
     if prob >= THRESHOLD:
-        return (
-            "FRAUDE (sospecha)",
-            "🟠",
-            f"El modelo asignó {pct:.1f} % de probabilidad de fraude "
-            f"(por encima del umbral {THRESHOLD:.0%}). Revisar antes de aprobar.",
-        )
+        return {
+            "decision": "FRAUDE — sospecha",
+            "accion": "Revisar antes de aprobar.",
+            "color": "warning",
+            "texto": (
+                f"El modelo dio {pct:.1f} % (umbral = 50 %). Cruzó la línea de "
+                "decisión: la etiqueta es fraude, pero no es el caso más extremo. "
+                "Conviene validar monto, hora y comportamiento del cliente."
+            ),
+        }
     if prob >= 0.25:
-        return (
-            "LEGÍTIMA (con cautela)",
-            "🟡",
-            f"El modelo asignó {pct:.1f} % de probabilidad de fraude "
-            f"(por debajo del umbral {THRESHOLD:.0%}). Suele aprobarse, "
-            "pero si el monto o el contexto son raros, conviene una revisión manual.",
-        )
-    return (
-        "LEGÍTIMA",
-        "🟢",
-        f"El modelo asignó solo {pct:.1f} % de probabilidad de fraude. "
-        "La transacción se ve como comportamiento normal.",
-    )
+        return {
+            "decision": "LEGÍTIMA — con cautela",
+            "accion": "Aprobar con seguimiento si el contexto es raro.",
+            "color": "info",
+            "texto": (
+                f"El modelo dio {pct:.1f} %, por debajo del 50 %, así que la "
+                "etiqueta es legítima. Aun así no es un score cercanísimo a 0: "
+                "si el monto es atípico, una revisión humana ayuda."
+            ),
+        }
+    return {
+        "decision": "LEGÍTIMA",
+        "accion": "Aprobar con normalidad.",
+        "color": "success",
+        "texto": (
+            f"El modelo solo asignó {pct:.1f} % de probabilidad de fraude. "
+            "Se parece al comportamiento habitual de transacciones normales."
+        ),
+    }
 
 
-def explicar_metricas(nombre: str, m: dict) -> str:
-    return (
-        f"**{nombre}** en el conjunto de prueba del proyecto:\n\n"
-        f"- **Precision {m['precision']:.1%}**: de las que marcó como fraude, "
-        f"¿cuántas sí lo eran?\n"
-        f"- **Recall {m['recall']:.1%}**: de todos los fraudes reales, "
-        f"¿cuántos detectó?\n"
-        f"- **F1 {m['f1']:.1%}**: equilibrio entre Precision y Recall.\n"
-        f"- **AUC-PR {m['auc_pr']:.1%}**: calidad en problema desbalanceado "
-        f"(más útil que la exactitud global)."
+def mostrar_resultado_claro(prob: float, amount: float | None = None):
+    info = interpretar_una(prob)
+    st.markdown("### Resultado en palabras (no solo el número)")
+    box = {
+        "error": st.error,
+        "warning": st.warning,
+        "info": st.info,
+        "success": st.success,
+    }[info["color"]]
+    box(f"**Decisión:** {info['decision']}\n\n**Qué hacer:** {info['accion']}")
+    st.write(info["texto"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Probabilidad de fraude", f"{prob:.1%}")
+    c2.metric("Umbral de decisión", "50 %")
+    c3.metric(
+        "Etiqueta final",
+        "Fraude" if prob >= THRESHOLD else "Legítima",
     )
+    if amount is not None:
+        st.caption(f"Monto analizado (Amount): {amount:,.2f}")
+
+    st.markdown("#### Cómo leer el porcentaje")
+    st.markdown(
+        f"""
+| Rango del score | Significado práctico |
+|-----------------|----------------------|
+| 0 % – 25 % | Casi seguro legítima |
+| 25 % – 49 % | Legítima, pero no “perfecta” |
+| **50 % – 79 %** | **Se etiqueta fraude** (sospecha) |
+| 80 % – 100 % | Fraude con alta prioridad |
+
+Tu score fue **{prob:.1%}** → cae en la fila correspondiente de la tabla.
+"""
+    )
+    st.progress(min(max(float(prob), 0.0), 1.0), text=f"Score {prob:.1%} (0 % = limpia · 100 % = fraude)")
+
+
+def listar_ejemplos() -> list[Path]:
+    if not EJEMPLOS_DIR.exists():
+        return []
+    return sorted(EJEMPLOS_DIR.glob("*.csv"))
 
 
 # ---------------------------------------------------------------------------
-# Cabecera
+# Cabecera: objetivo + entrada
 # ---------------------------------------------------------------------------
 st.title("💳 Detector de fraude en tarjetas de crédito")
+
 st.markdown(
     """
-Esta aplicación ayuda a **decidir si una transacción parece fraudulenta o legítima**.
+## ¿Cuál es el objetivo?
+Ayudar a un analista (o al banco) a responder:
 
-Fue entrenada con el dataset público **Credit Card Fraud** (ULB / Kaggle):
-casi 285 mil transacciones, de las cuales solo ~0,17 % son fraude.
-Por eso no basta mirar “accuracy”: aquí importan **Recall** (atrapar fraudes)
-y **Precision** (no alarmar de más).
+> **“¿Esta transacción parece fraude o parece normal?”**
+
+El sistema **no reemplaza** al humano: da una **probabilidad** y una **recomendación**
+para decidir más rápido y con menos errores.
 """
 )
 
-with st.expander("¿Qué hace esta app? (léeme primero)", expanded=True):
+cobj1, cobj2 = st.columns(2)
+with cobj1:
     st.markdown(
         """
-1. **Eliges un modelo** (XGBoost o MLP).
-2. **Cargas datos**: un CSV de transacciones o un monto de prueba.
-3. La app calcula un **score de fraude** entre 0 y 1:
-   - cerca de **0** → parece legítima  
-   - cerca de **1** → parece fraude  
-4. Si el score es **≥ 0,5**, se etiqueta como fraude; si no, como legítima.
-5. Te mostramos **qué significa el resultado** en lenguaje claro.
+### ¿Qué entra al modelo? (la entrada)
+Aceptamos un CSV (o una demo con monto) con:
 
-**Columnas del CSV:** `V1` … `V28` (variables anonimizadas) y `Amount` (monto).
-Usa los archivos de ejemplo (`ejemplo_mixto.csv`, etc.) si no tienes datos propios.
+- **`Amount`**: cuánto dinero movió la operación  
+- **`V1` … `V28`**: variables del banco ya anonimizadas (PCA).  
+  No son “nombre” ni “tarjeta”: son números que resumen el patrón de la compra.
+
+**Por qué aceptamos esta entrada:** es el formato del dataset público ULB/Kaggle
+con el que se entrenó el modelo. Así cualquiera puede probar con ejemplos reales
+sin datos personales sensibles.
 """
     )
+with cobj2:
+    st.markdown(
+        """
+### ¿Qué sale? (la salida)
+No es solo un número suelto. Verás:
+
+1. **Probabilidad de fraude** (0 % a 100 %)  
+2. **Decisión** Legítima / Fraude (umbral 50 %)  
+3. **Qué hacer** (aprobar, revisar o bloquear)  
+4. **Texto explicando** por qué se tomó esa decisión  
+
+**Importante:** el fraude es raro (~0,17 % de los casos). Por eso no usamos
+“accuracy” sola: miramos si atrapamos fraudes (Recall) sin alarmar de más (Precision).
+"""
+    )
+
+with st.expander("Descarga CSV de ejemplo para probar la app", expanded=True):
+    st.markdown(
+        """
+Elige un archivo, descárgalo y luego súbelo en la sección de abajo:
+
+| Archivo | Qué contiene | Para qué sirve |
+|---------|--------------|----------------|
+| `ejemplo_una_fila.csv` | 1 transacción normal | Prueba rapidísima |
+| `ejemplo_legitimas.csv` | Varias normales | Ver scores bajos |
+| `ejemplo_fraudes.csv` | Varias fraudulentas | Ver scores altos / alarmas |
+| `ejemplo_mixto.csv` | Normales + fraudes | Caso realista de lote |
+"""
+    )
+    ejemplos = listar_ejemplos()
+    if not ejemplos:
+        st.warning("No se encontraron CSV de ejemplo en `app/ejemplos_csv/`.")
+    else:
+        cols = st.columns(2)
+        for i, path in enumerate(ejemplos):
+            with cols[i % 2]:
+                st.download_button(
+                    label=f"⬇ Descargar {path.name}",
+                    data=path.read_bytes(),
+                    file_name=path.name,
+                    mime="text/csv",
+                    key=f"dl_{path.name}",
+                    use_container_width=True,
+                )
 
 arts = load_artifacts()
 if arts is None:
     st.error(
-        "No se encontraron los modelos entrenados en `artifacts/`. "
-        "En local ejecuta `python -m src.preprocess` y `python -m src.train`."
+        "No están los modelos en `artifacts/`. "
+        "En local: `python -m src.preprocess` y `python -m src.train`."
     )
     st.stop()
 
@@ -170,115 +262,111 @@ scale_cols = arts["scale_cols"]
 comparison = arts.get("comparison") or {}
 
 # ---------------------------------------------------------------------------
-# Sidebar: contexto y modelos
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Cómo usar la app")
+    st.header("Guía rápida")
     st.markdown(
         """
-**Paso 1.** Elige el modelo abajo.  
-**Paso 2.** Sube un CSV o prueba un monto.  
-**Paso 3.** Lee el score y la explicación.
+1. Descarga un CSV de ejemplo  
+2. Elige modelo  
+3. Sube el CSV  
+4. Lee la **decisión en palabras**
 """
     )
     st.divider()
-    st.subheader("¿Qué modelo elijo?")
+    st.subheader("Modelos")
     st.markdown(
         """
-**XGBoost (recomendado para operar)**  
-Árboles con boosting. En nuestras pruebas equilibra mejor:
-menos falsas alarmas y buen F1.
-
-**MLP (red neuronal)**  
-Deep Learning tabular. Detecta más fraudes (alto Recall),
-pero genera más falsas alarmas si el umbral es 0,5.
+**XGBoost** — más equilibrado (menos falsas alarmas).  
+**MLP** — red neuronal; atrapa más fraudes pero alarma más.
 """
     )
     if comparison:
         st.divider()
-        st.subheader("Desempeño en el proyecto")
-        if "xgboost" in comparison:
-            st.caption("XGBoost")
-            st.write(
-                f"Precision {comparison['xgboost']['precision']:.1%} · "
-                f"Recall {comparison['xgboost']['recall']:.1%} · "
-                f"F1 {comparison['xgboost']['f1']:.1%}"
-            )
-        if "mlp" in comparison:
-            st.caption("MLP")
-            st.write(
-                f"Precision {comparison['mlp']['precision']:.1%} · "
-                f"Recall {comparison['mlp']['recall']:.1%} · "
-                f"F1 {comparison['mlp']['f1']:.1%}"
-            )
-
+        st.markdown("**Resultados del entrenamiento (test)**")
+        for key, label in (("xgboost", "XGBoost"), ("mlp", "MLP")):
+            if key in comparison:
+                m = comparison[key]
+                st.caption(label)
+                st.write(
+                    f"Precision {m['precision']:.0%} · "
+                    f"Recall {m['recall']:.0%} · "
+                    f"F1 {m['f1']:.0%}"
+                )
     st.divider()
-    st.caption("Universidad de Cundinamarca · Especialización en IA")
-    st.caption("Proyecto final · Aplicaciones en Deep Learning")
+    st.caption("UCundinamarca · Esp. IA · Deep Learning")
 
 # ---------------------------------------------------------------------------
-# Controles principales
+# Controles
 # ---------------------------------------------------------------------------
+st.markdown("## Analizar transacciones")
 col_a, col_b = st.columns(2)
 with col_a:
     modelo = st.selectbox(
-        "1) Modelo a usar",
+        "1) ¿Con qué modelo quieres analizar?",
         ["XGBoost", "MLP"],
-        help="XGBoost suele ser más equilibrado; MLP atrapa más fraudes pero alarma más.",
+        help="Si no sabes cuál, empieza con XGBoost.",
     )
 with col_b:
     modo = st.radio(
-        "2) Cómo ingresar datos",
-        ["Subir CSV de transacciones", "Probar un solo monto (demo)"],
-        help="CSV = varias filas reales/ejemplo. Demo = solo Amount para ver la UX.",
+        "2) ¿Cómo vas a ingresar los datos?",
+        ["Subir CSV (recomendado)", "Probar solo un monto (demo UX)"],
     )
 
 if modelo == "XGBoost" and "xgboost" in comparison:
-    st.info(explicar_metricas("XGBoost", comparison["xgboost"]))
+    m = comparison["xgboost"]
+    st.info(
+        f"**XGBoost en este proyecto:** de cada 100 alarmas, ~{100*m['precision']:.0f} "
+        f"eran fraude de verdad (Precision). Detectó ~{100*m['recall']:.0f} % de los "
+        f"fraudes reales (Recall). F1 = {m['f1']:.0%}."
+    )
 elif modelo == "MLP" and "mlp" in comparison:
-    st.warning(explicar_metricas("MLP", comparison["mlp"]))
+    m = comparison["mlp"]
+    st.warning(
+        f"**MLP en este proyecto:** detectó ~{100*m['recall']:.0f} % de los fraudes "
+        f"(Recall alto), pero solo ~{100*m['precision']:.0f} % de sus alarmas eran "
+        f"correctas (Precision baja → muchas falsas alarmas). F1 = {m['f1']:.0%}."
+    )
 
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Modo CSV
+# CSV
 # ---------------------------------------------------------------------------
 if modo.startswith("Subir CSV"):
-    st.subheader("Cargar archivo CSV")
+    st.subheader("3) Sube tu CSV (o uno de los ejemplos)")
     st.markdown(
-        f"""
-Sube un archivo con estas columnas: **{", ".join(features[:3])} … {features[-1]}**.
-
-Ejemplos listos: `ejemplo_una_fila.csv`, `ejemplo_legitimas.csv`,
-`ejemplo_fraudes.csv`, `ejemplo_mixto.csv`.
-"""
+        f"Columnas obligatorias: `{features[0]}` … `{features[-2]}` y **`{features[-1]}`**."
     )
-    file = st.file_uploader("Selecciona el CSV", type=["csv"])
+    file = st.file_uploader("Archivo CSV", type=["csv"])
 
     if file is not None:
         raw = pd.read_csv(file)
         missing = [c for c in features if c not in raw.columns]
         if missing:
             st.error(
-                "Ese CSV no tiene todas las columnas que el modelo necesita. "
-                f"Faltan, por ejemplo: {', '.join(missing[:6])}"
-                + ("…" if len(missing) > 6 else "")
+                "Este archivo no sirve todavía: le faltan columnas que el modelo espera. "
+                f"Ejemplos de faltantes: {', '.join(missing[:8])}"
             )
             st.stop()
 
         x = prepare(raw, arts["scaler"], features, scale_cols)
         probs = predict_proba(modelo, x, arts)
         if probs is None:
-            st.error("El modelo elegido no está disponible.")
+            st.error("Modelo no disponible.")
             st.stop()
 
         out = raw.copy()
         out["probabilidad_fraude"] = probs
-        out["predicciones"] = [
+        out["porcentaje"] = [f"{100*p:.1f} %" for p in probs]
+        out["decision"] = [
             "Fraude" if p >= THRESHOLD else "Legítima" for p in probs
         ]
-        out["nivel"] = [
-            "Alta" if p >= 0.8 else ("Media" if p >= THRESHOLD else "Baja")
+        out["que_hacer"] = [
+            ("Bloquear/revisar YA" if p >= 0.8 else "Revisar antes de aprobar")
+            if p >= THRESHOLD
+            else ("Aprobar con cautela" if p >= 0.25 else "Aprobar")
             for p in probs
         ]
 
@@ -286,95 +374,68 @@ Ejemplos listos: `ejemplo_una_fila.csv`, `ejemplo_legitimas.csv`,
         n_fraud = int((probs >= THRESHOLD).sum())
         n_ok = n - n_fraud
 
-        st.success("Análisis listo. Así se leen los resultados:")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Transacciones", n)
-        m2.metric("Marcadas como fraude", n_fraud)
-        m3.metric("Marcadas como legítimas", n_ok)
-        m4.metric("Score promedio", f"{float(probs.mean()):.3f}")
+        st.markdown("## Resumen del lote (en español)")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Transacciones analizadas", n)
+        m2.metric("Decisión: Fraude", n_fraud)
+        m3.metric("Decisión: Legítima", n_ok)
 
-        st.markdown(
-            f"""
-### ¿Qué significa esto?
-- Se revisaron **{n}** transacciones con el modelo **{modelo}**.
-- **{n_fraud}** quedaron por encima del umbral {THRESHOLD:.0%} → etiqueta **Fraude**.
-- **{n_ok}** quedaron por debajo → etiqueta **Legítima**.
-- `probabilidad_fraude` es el score continuo (0 a 1). Mientras más alto, más sospechosa.
-- `nivel` resume la urgencia: **Alta** (≥80 %), **Media** (≥50 %), **Baja** (<50 %).
-"""
+        st.success(
+            f"Con **{modelo}** y umbral **50 %**: "
+            f"**{n_fraud}** se marcaron como fraude y **{n_ok}** como legítimas. "
+            "Abajo cada fila trae el porcentaje, la decisión y qué hacer."
         )
 
-        st.dataframe(out.head(100), use_container_width=True)
+        st.dataframe(
+            out[
+                ["Amount", "porcentaje", "decision", "que_hacer"]
+                + [c for c in out.columns if c not in ("Amount", "porcentaje", "decision", "que_hacer", "probabilidad_fraude")]
+            ].head(100),
+            use_container_width=True,
+        )
+
         st.download_button(
-            "Descargar resultados (CSV)",
+            "⬇ Descargar resultados interpretados (CSV)",
             out.to_csv(index=False).encode("utf-8"),
-            "resultados_fraude.csv",
+            "resultados_interpretados.csv",
             "text/csv",
-            help="Guarda el archivo con scores para revisarlo en Excel.",
         )
 
-        # Destacar la más sospechosa
         idx = int(probs.argmax())
-        etiqueta, icono, texto = interpretar(float(probs[idx]))
-        st.markdown(f"### Transacción más sospechosa de este archivo {icono}")
-        st.write(f"**Resultado:** {etiqueta}")
-        st.write(texto)
-        st.write(f"Monto (Amount): **{float(raw.iloc[idx]['Amount']):.2f}**")
+        st.markdown("---")
+        st.markdown("## Caso más sospechoso del archivo")
+        mostrar_resultado_claro(float(probs[idx]), float(raw.iloc[idx]["Amount"]))
 
-# ---------------------------------------------------------------------------
-# Modo demo Amount
-# ---------------------------------------------------------------------------
 else:
-    st.subheader("Probar un solo monto (demo de UX)")
-    st.markdown(
-        """
-Esta demo **no usa una transacción real completa**: solo cambias el **Amount**
-y el resto de variables (`V1`–`V28`) se ponen en 0 para mostrar cómo responde la interfaz.
-
-Para un análisis serio, usa **Subir CSV** con los archivos de ejemplo.
-"""
+    st.subheader("3) Demo con un solo monto")
+    st.warning(
+        "Esta demo **solo cambia Amount** y pone V1–V28 en cero. "
+        "Sirve para ver la interfaz. Para resultados serios, usa un CSV de ejemplo."
     )
-    amount = st.number_input(
-        "Monto de la transacción (Amount)",
-        min_value=0.0,
-        value=100.0,
-        step=10.0,
-        help="Ejemplos: 10 (compra chica), 100, 500, 2000 (monto alto).",
-    )
-    if st.button("Calcular probabilidad de fraude", type="primary"):
+    amount = st.number_input("Monto (Amount)", min_value=0.0, value=100.0, step=10.0)
+    if st.button("Calcular y explicar resultado", type="primary"):
         row = {c: 0.0 for c in features}
         row["Amount"] = amount
         x = prepare(pd.DataFrame([row]), arts["scaler"], features, scale_cols)
         probs = predict_proba(modelo, x, arts)
         if probs is None:
-            st.error("El modelo elegido no está disponible.")
+            st.error("Modelo no disponible.")
             st.stop()
-        prob = float(probs[0])
-        etiqueta, icono, texto = interpretar(prob)
-
-        st.markdown(f"## Resultado {icono}")
-        c1, c2 = st.columns(2)
-        c1.metric("Probabilidad de fraude", f"{prob:.1%}")
-        c2.metric("Decisión (umbral 50 %)", etiqueta.split("(")[0].strip())
-        st.write(texto)
-        st.progress(min(max(prob, 0.0), 1.0))
-        st.caption(
-            "Barra = score 0–100 %. La línea mental de decisión está en 50 %."
-        )
+        mostrar_resultado_claro(float(probs[0]), amount)
 
 st.divider()
-with st.expander("Glosario rápido"):
+with st.expander("Glosario: cómo interpretar TODO"):
     st.markdown(
         """
-| Término | Significado simple |
-|---------|-------------------|
-| **Fraude** | Transacción que el modelo cree ilegítima |
-| **Legítima** | Transacción que el modelo cree normal |
-| **Score / probabilidad** | Número entre 0 y 1; más alto = más sospechosa |
-| **Umbral 0,5** | Si score ≥ 0,5 → se etiqueta fraude |
-| **Precision** | De las alarmas, cuántas eran correctas |
-| **Recall** | De los fraudes reales, cuántos se atraparon |
-| **V1–V28** | Variables anonimizadas del banco (PCA) |
-| **Amount** | Monto de la compra/transacción |
+| Lo que ves | Qué significa | Cómo actuar |
+|------------|---------------|-------------|
+| Probabilidad 12 % | Muy poca sospecha | Aprobar |
+| Probabilidad 40 % | Aún bajo el umbral | Aprobar; revisar si el monto es raro |
+| Probabilidad 55 % | Cruzó el 50 % | Etiqueta fraude → revisar |
+| Probabilidad 90 % | Muy sospechosa | Bloquear / investigar |
+| Precision alta | Pocas alarmas falsas | Confías más en cada alerta |
+| Recall alto | Se escapan pocos fraudes | Bueno para no perder dinero |
+| V1–V28 | Huella numérica de la compra | No necesitas “traducirlas” a texto |
+| Amount | Dinero de la operación | Parte de la entrada del modelo |
 """
     )
